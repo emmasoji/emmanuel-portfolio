@@ -35,7 +35,7 @@ const projects: Project[] = [
         technologies: ["React", "TypeScript", "Supabase", "Vite"],
         status: "deployed",
         featured: false,
-        liveUrl: "https://tboyartworks.netlify.app/"
+        liveUrl: "https://tboyarts.netlify.app/"
     }
 ];
 
