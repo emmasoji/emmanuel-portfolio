@@ -1,6 +1,7 @@
-import { ArrowUpRight, ExternalLink, X } from "lucide-react";
+import { Activity, ArrowUpRight, ExternalLink, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import TboyArtsMonitor from "../components/TboyArtsMonitor";
 
 type ProjectStatus = "deployed" | "undeployed";
 
@@ -41,6 +42,7 @@ const projects: Project[] = [
 
 const Projects = () => {
     const [showDevelopmentModal, setShowDevelopmentModal] = useState(false);
+    const [showTboyArtsMonitor, setShowTboyArtsMonitor] = useState(false);
 
     /*
      * Automatically remove the notification
@@ -237,6 +239,25 @@ const Projects = () => {
 
                                     {/* Project action */}
                                     <div className="flex items-start gap-2 lg:justify-end">
+                                        {project.title === "TboyArts" && (
+                                            <button
+                                                type="button"
+                                                onClick={event => {
+                                                    event.stopPropagation();
+                                                    setShowTboyArtsMonitor(true);
+                                                }}
+                                                aria-label="Open TboyArts monitor"
+                                                title="Monitor TboyArts"
+                                                className={`rounded-full border p-3 transition-all duration-300 hover:-translate-y-1 ${
+                                                    project.featured
+                                                        ? "border-zinc-800 text-zinc-400 hover:border-violet-500/50 hover:text-white"
+                                                        : "border-zinc-200 text-zinc-500 dark:border-zinc-800 dark:hover:text-white"
+                                                }`}
+                                            >
+                                                <Activity size={17} />
+                                            </button>
+                                        )}
+
                                         <button
                                             type="button"
                                             onClick={event => {
@@ -389,6 +410,11 @@ const Projects = () => {
                     </>
                 )}
             </AnimatePresence>
+
+            <TboyArtsMonitor
+                open={showTboyArtsMonitor}
+                onClose={() => setShowTboyArtsMonitor(false)}
+            />
         </>
     );
 };
