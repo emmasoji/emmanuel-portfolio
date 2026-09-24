@@ -66,6 +66,8 @@ interface RealtimeResponse {
 type MetricKey = "visitors" | "page_views" | "traffic";
 
 const API_BASE = "https://tboyarts-api.onrender.com/api/monitor";
+const MONITOR_TOKEN =
+    import.meta.env.VITE_TBOYARTS_MONITOR_TOKEN ?? "";
 
 function getDefaultStartDate() {
     const date = new Date();
@@ -229,9 +231,21 @@ export default function TboyArtsMonitor({
                 analyticsResponse,
                 realtimeResponse
             ] = await Promise.all([
-                fetch(`${API_BASE}`),
-                fetch(analyticsUrl),
-                fetch(`${API_BASE}/analytics/realtime`)
+                fetch(`${API_BASE}`, {
+                    headers: {
+                        "X-Monitor-Token": MONITOR_TOKEN
+                    }
+                }),
+                fetch(analyticsUrl, {
+                    headers: {
+                        "X-Monitor-Token": MONITOR_TOKEN
+                    }
+                }),
+                fetch(`${API_BASE}/analytics/realtime`, {
+                    headers: {
+                        "X-Monitor-Token": MONITOR_TOKEN
+                    }
+                })
             ]);
 
             const elapsed = Math.round(
