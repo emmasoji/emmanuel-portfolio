@@ -2,13 +2,20 @@ import { AnimatePresence, motion } from "motion/react";
 import {
     Activity,
     BarChart3,
-    CalendarDays,
     Clock3,
     Eye,
     Gauge,
     Users,
     X
 } from "lucide-react";
+import {
+    Line,
+    LineChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis
+} from "recharts";
 import { useEffect, useMemo, useState } from "react";
 
 interface TboyArtsMonitorProps {
@@ -56,6 +63,20 @@ interface RealtimeResponse {
     page_views: number;
 }
 
+type MetricKey = "visitors" | "page_views" | "traffic";
+
+const API_BASE = "https://tboyarts-api.onrender.com/api/monitor";
+
+function getDefaultStartDate() {
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    return date.toISOString().slice(0, 10);
+}
+
+function getDefaultEndDate() {
+    return new Date().toISOString().slice(0, 10);
+}
+
 function formatUptime(startedAt: string) {
     const start = new Date(startedAt).getTime();
 
@@ -89,7 +110,9 @@ function formatUptime(startedAt: string) {
 }
 
 function formatNumber(value: number) {
-    return new Intl.NumberFormat("en-US").format(value);
+    return new Intl.NumberFormat("en-US", {
+        maximumFractionDigits: 2
+    }).format(value);
 }
 
 function formatDateLabel(dateString: string) {
@@ -104,58 +127,14 @@ function formatDateLabel(dateString: string) {
     }).format(new Date(year, month, day));
 }
 
-function getDateKey(date: Date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
+function formatInputDate(dateString: string) {
+    if (!dateString) return "—";
 
-    return `${year}${month}${day}`;
-}
-
-function getCalendarDays(start: string, end: string) {
-    if (!start || !end) return [];
-
-    const startDate = new Date(`${start}T00:00:00`);
-    const endDate = new Date(`${end}T00:00:00`);
-
-    if (
-        Number.isNaN(startDate.getTime()) ||
-        Number.isNaN(endDate.getTime())
-    ) {
-        return [];
-    }
-
-    const firstDay = new Date(
-        startDate.getFullYear(),
-        startDate.getMonth(),
-        1
-    );
-
-    const lastDay = new Date(
-        endDate.getFullYear(),
-        endDate.getMonth(),
-        endDate.getDate()
-    );
-
-    const calendarStart = new Date(firstDay);
-    calendarStart.setDate(
-        calendarStart.getDate() - calendarStart.getDay()
-    );
-
-    const calendarEnd = new Date(lastDay);
-    calendarEnd.setDate(
-        calendarEnd.getDate() + (6 - calendarEnd.getDay())
-    );
-
-    const days: Date[] = [];
-    const cursor = new Date(calendarStart);
-
-    while (cursor <= calendarEnd) {
-        days.push(new Date(cursor));
-        cursor.setDate(cursor.getDate() + 1);
-    }
-
-    return days;
+    return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+    }).format(new Date(`${dateString}T00:00:00`));
 }
 
 function MetricSummary({
@@ -220,94 +199,82 @@ export default function TboyArtsMonitor({
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(false);
     const [uptime, setUptime] = useState("—");
-    const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+    const [startDate, setStartDate] = useState(getDefaultStartDate);
+    const [endDate, setEndDate] = useState(getDefaultEndDate);
+    const [appliedStartDate, setAppliedStartDate] =
+        useState(getDefaultStartDate);
+    const [appliedEndDate, setAppliedEndDate] =
+        useState(getDefaultEndDate);
+
+    const [metric, setMetric] = useState<MetricKey>("visitors");
+
+    const load = async (
+        selectedStart: string,
+        selectedEnd: string
+    ) => {
+        setLoading(true);
+        setError(false);
+
+        const started = performance.now();
+
+        try {
+            const analyticsUrl =
+                `${API_BASE}/analytics?start_date=${encodeURIComponent(
+                    selectedStart
+                )}&end_date=${encodeURIComponent(selectedEnd)}`;
+
+            const [
+                monitorResponse,
+                analyticsResponse,
+                realtimeResponse
+            ] = await Promise.all([
+                fetch(`${API_BASE}`),
+                fetch(analyticsUrl),
+                fetch(`${API_BASE}/analytics/realtime`)
+            ]);
+
+            const elapsed = Math.round(
+                performance.now() - started
+            );
+
+            if (
+                !monitorResponse.ok ||
+                !analyticsResponse.ok ||
+                !realtimeResponse.ok
+            ) {
+                throw new Error("Monitor request failed");
+            }
+
+            const monitorData =
+                (await monitorResponse.json()) as MonitorResponse;
+
+            const analyticsData =
+                (await analyticsResponse.json()) as AnalyticsResponse;
+
+            const realtimeData =
+                (await realtimeResponse.json()) as RealtimeResponse;
+
+            setMonitor(monitorData);
+            setAnalytics(analyticsData);
+            setRealtime(realtimeData);
+            setResponseTime(elapsed);
+        } catch {
+            setMonitor(null);
+            setAnalytics(null);
+            setRealtime(null);
+            setResponseTime(null);
+            setError(true);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (!open) return;
 
-        let cancelled = false;
-
-        const load = async () => {
-            setLoading(true);
-            setError(false);
-
-            const started = performance.now();
-
-            try {
-                const [
-                    monitorResponse,
-                    analyticsResponse,
-                    realtimeResponse
-                ] = await Promise.all([
-                    fetch(
-                        "https://tboyarts-api.onrender.com/api/monitor"
-                    ),
-                    fetch(
-                        "https://tboyarts-api.onrender.com/api/monitor/analytics"
-                    ),
-                    fetch(
-                        "https://tboyarts-api.onrender.com/api/monitor/analytics/realtime"
-                    )
-                ]);
-
-                const elapsed = Math.round(
-                    performance.now() - started
-                );
-
-                if (
-                    !monitorResponse.ok ||
-                    !analyticsResponse.ok ||
-                    !realtimeResponse.ok
-                ) {
-                    throw new Error("Monitor request failed");
-                }
-
-                const monitorData =
-                    (await monitorResponse.json()) as MonitorResponse;
-
-                const analyticsData =
-                    (await analyticsResponse.json()) as AnalyticsResponse;
-
-                const realtimeData =
-                    (await realtimeResponse.json()) as RealtimeResponse;
-
-                if (cancelled) return;
-
-                setMonitor(monitorData);
-                setAnalytics(analyticsData);
-                setRealtime(realtimeData);
-                setResponseTime(elapsed);
-
-                if (analyticsData.daily.length > 0) {
-                    setSelectedDate(
-                        analyticsData.daily[
-                            analyticsData.daily.length - 1
-                        ].date
-                    );
-                } else {
-                    setSelectedDate(null);
-                }
-            } catch {
-                if (cancelled) return;
-
-                setMonitor(null);
-                setAnalytics(null);
-                setRealtime(null);
-                setResponseTime(null);
-                setError(true);
-            } finally {
-                if (!cancelled) {
-                    setLoading(false);
-                }
-            }
-        };
-
-        load();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [open]);
+        void load(appliedStartDate, appliedEndDate);
+    }, [open, appliedStartDate, appliedEndDate]);
 
     useEffect(() => {
         if (!monitor?.started_at) {
@@ -326,28 +293,34 @@ export default function TboyArtsMonitor({
         return () => window.clearInterval(interval);
     }, [monitor?.started_at]);
 
-    const calendarDays = useMemo(
-        () =>
-            getCalendarDays(
-                analytics?.period.start ?? "",
-                analytics?.period.end ?? ""
-            ),
-        [analytics?.period.start, analytics?.period.end]
-    );
+    const chartData = useMemo(() => {
+        if (!analytics?.daily) return [];
 
-    const dailyMap = useMemo(() => {
-        const map = new Map<string, DailyAnalytics>();
+        return analytics.daily.map(day => ({
+            date: formatDateLabel(day.date),
+            value: day[metric]
+        }));
+    }, [analytics?.daily, metric]);
 
-        analytics?.daily.forEach(day => {
-            map.set(day.date, day);
-        });
+    const metricLabel =
+        metric === "visitors"
+            ? "Visitors"
+            : metric === "page_views"
+              ? "Page views"
+              : "Traffic";
 
-        return map;
-    }, [analytics?.daily]);
+    const selectedSummary = analytics?.summary[metric];
 
-    const selectedAnalytics = selectedDate
-        ? dailyMap.get(selectedDate)
-        : undefined;
+    const applyDateRange = () => {
+        if (!startDate || !endDate) return;
+
+        if (startDate > endDate) {
+            return;
+        }
+
+        setAppliedStartDate(startDate);
+        setAppliedEndDate(endDate);
+    };
 
     return (
         <AnimatePresence>
@@ -425,7 +398,6 @@ export default function TboyArtsMonitor({
                                     </div>
                                 ) : (
                                     <>
-                                        {/* System status */}
                                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                                             <div className="rounded-3xl border border-zinc-200 bg-zinc-50 p-6 dark:border-zinc-800 dark:bg-zinc-900/50">
                                                 <div className="flex items-center justify-between">
@@ -499,7 +471,6 @@ export default function TboyArtsMonitor({
                                             </div>
                                         </div>
 
-                                        {/* Realtime */}
                                         <div className="mt-4 rounded-3xl border border-violet-500/20 bg-violet-500/[0.04] p-6 dark:bg-violet-500/[0.06]">
                                             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                                                 <div>
@@ -547,259 +518,321 @@ export default function TboyArtsMonitor({
                                             </div>
                                         </div>
 
-                                        {/* Calendar */}
                                         <div className="mt-8 rounded-3xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-800 dark:bg-zinc-900/50 sm:p-7">
-                                            <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+                                            <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
                                                 <div>
                                                     <div className="flex items-center gap-3">
-                                                        <CalendarDays
+                                                        <BarChart3
                                                             size={20}
                                                             className="text-violet-500"
                                                         />
 
                                                         <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">
-                                                            Activity calendar
+                                                            Activity
                                                         </p>
                                                     </div>
 
                                                     <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                                                        Daily visitors, page
-                                                        views and traffic.
+                                                        {formatInputDate(
+                                                            appliedStartDate
+                                                        )}{" "}
+                                                        —{" "}
+                                                        {formatInputDate(
+                                                            appliedEndDate
+                                                        )}
                                                     </p>
                                                 </div>
 
-                                                {selectedAnalytics && (
-                                                    <div className="text-left sm:text-right">
-                                                        <p className="text-xs text-zinc-400">
-                                                            {formatDateLabel(
-                                                                selectedAnalytics.date
-                                                            )}
-                                                        </p>
+                                                <div className="flex flex-col gap-3 sm:flex-row">
+                                                    <div className="rounded-2xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950">
+                                                        <div className="flex items-center gap-3">
+                                                            <div>
+                                                                <p className="text-[9px] uppercase tracking-wider text-zinc-400">
+                                                                    From
+                                                                </p>
 
-                                                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                                                            <span>
-                                                                Visitors{" "}
-                                                                <strong className="text-zinc-950 dark:text-white">
-                                                                    {formatNumber(
-                                                                        selectedAnalytics.visitors
-                                                                    )}
-                                                                </strong>
+                                                                <input
+                                                                    type="date"
+                                                                    value={
+                                                                        startDate
+                                                                    }
+                                                                    max={
+                                                                        endDate
+                                                                    }
+                                                                    onChange={event =>
+                                                                        setStartDate(
+                                                                            event
+                                                                                .target
+                                                                                .value
+                                                                        )
+                                                                    }
+                                                                    className="mt-1 bg-transparent text-sm font-medium text-zinc-950 outline-none dark:text-white"
+                                                                />
+                                                            </div>
+
+                                                            <span className="text-zinc-300 dark:text-zinc-700">
+                                                                →
                                                             </span>
 
-                                                            <span>
-                                                                Views{" "}
-                                                                <strong className="text-zinc-950 dark:text-white">
-                                                                    {formatNumber(
-                                                                        selectedAnalytics.page_views
-                                                                    )}
-                                                                </strong>
-                                                            </span>
+                                                            <div>
+                                                                <p className="text-[9px] uppercase tracking-wider text-zinc-400">
+                                                                    To
+                                                                </p>
 
-                                                            <span>
-                                                                Traffic{" "}
-                                                                <strong className="text-zinc-950 dark:text-white">
-                                                                    {formatNumber(
-                                                                        selectedAnalytics.traffic
-                                                                    )}
-                                                                </strong>
-                                                            </span>
+                                                                <input
+                                                                    type="date"
+                                                                    value={
+                                                                        endDate
+                                                                    }
+                                                                    min={
+                                                                        startDate
+                                                                    }
+                                                                    onChange={event =>
+                                                                        setEndDate(
+                                                                            event
+                                                                                .target
+                                                                                .value
+                                                                        )
+                                                                    }
+                                                                    className="mt-1 bg-transparent text-sm font-medium text-zinc-950 outline-none dark:text-white"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={
+                                                            applyDateRange
+                                                        }
+                                                        disabled={
+                                                            startDate >
+                                                            endDate
+                                                        }
+                                                        className="rounded-2xl bg-zinc-950 px-5 py-3 text-xs font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                                                    >
+                                                        Apply
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-6 flex flex-wrap gap-2">
+                                                {(
+                                                    [
+                                                        [
+                                                            "visitors",
+                                                            "Visitors"
+                                                        ],
+                                                        [
+                                                            "page_views",
+                                                            "Page views"
+                                                        ],
+                                                        [
+                                                            "traffic",
+                                                            "Traffic"
+                                                        ]
+                                                    ] as const
+                                                ).map(([key, label]) => (
+                                                    <button
+                                                        key={key}
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setMetric(key)
+                                                        }
+                                                        className={
+                                                            metric === key
+                                                                ? "rounded-full bg-violet-600 px-4 py-2 text-xs font-medium text-white"
+                                                                : "rounded-full border border-zinc-200 bg-white px-4 py-2 text-xs font-medium text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-white"
+                                                        }
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-7">
+                                                {chartData.length > 0 ? (
+                                                    <div className="h-[320px] w-full">
+                                                        <ResponsiveContainer
+                                                            width="100%"
+                                                            height="100%"
+                                                        >
+                                                            <LineChart
+                                                                data={
+                                                                    chartData
+                                                                }
+                                                                margin={{
+                                                                    top: 10,
+                                                                    right: 10,
+                                                                    left: -20,
+                                                                    bottom: 5
+                                                                }}
+                                                            >
+                                                                <XAxis
+                                                                    dataKey="date"
+                                                                    tick={{
+                                                                        fontSize: 10
+                                                                    }}
+                                                                    tickLine={
+                                                                        false
+                                                                    }
+                                                                    axisLine={
+                                                                        false
+                                                                    }
+                                                                    minTickGap={
+                                                                        35
+                                                                    }
+                                                                />
+
+                                                                <YAxis
+                                                                    allowDecimals={
+                                                                        false
+                                                                    }
+                                                                    tick={{
+                                                                        fontSize: 10
+                                                                    }}
+                                                                    tickLine={
+                                                                        false
+                                                                    }
+                                                                    axisLine={
+                                                                        false
+                                                                    }
+                                                                    width={45}
+                                                                />
+
+                                                                <Tooltip
+                                                                    contentStyle={{
+                                                                        borderRadius:
+                                                                            "16px",
+                                                                        border:
+                                                                            "1px solid rgba(161,161,170,0.25)",
+                                                                        background:
+                                                                            "rgba(255,255,255,0.96)"
+                                                                    }}
+                                                                    formatter={(
+                                                                        value
+                                                                    ) => [
+                                                                        formatNumber(
+                                                                            Number(
+                                                                                value
+                                                                            )
+                                                                        ),
+                                                                        metricLabel
+                                                                    ]}
+                                                                />
+
+                                                                <Line
+                                                                    type="monotone"
+                                                                    dataKey="value"
+                                                                    stroke="#7c3aed"
+                                                                    strokeWidth={
+                                                                        2.5
+                                                                    }
+                                                                    dot={{
+                                                                        r: 3
+                                                                    }}
+                                                                    activeDot={{
+                                                                        r: 5
+                                                                    }}
+                                                                />
+                                                            </LineChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800">
+                                                        <div className="text-center">
+                                                            <BarChart3
+                                                                size={24}
+                                                                className="mx-auto text-zinc-300 dark:text-zinc-700"
+                                                            />
+
+                                                            <p className="mt-3 text-sm font-medium text-zinc-600 dark:text-zinc-300">
+                                                                No historical
+                                                                data yet
+                                                            </p>
+
+                                                            <p className="mt-1 max-w-sm text-xs leading-5 text-zinc-400">
+                                                                GA4 has not
+                                                                processed daily
+                                                                analytics for
+                                                                this period.
+                                                                Realtime data
+                                                                remains
+                                                                available above.
+                                                            </p>
                                                         </div>
                                                     </div>
                                                 )}
                                             </div>
 
-                                            <div className="mt-7 grid grid-cols-7 gap-1.5 sm:gap-2">
-                                                {[
-                                                    "Sun",
-                                                    "Mon",
-                                                    "Tue",
-                                                    "Wed",
-                                                    "Thu",
-                                                    "Fri",
-                                                    "Sat"
-                                                ].map(day => (
-                                                    <div
-                                                        key={day}
-                                                        className="pb-2 text-center text-[10px] font-medium uppercase tracking-wider text-zinc-400"
-                                                    >
-                                                        {day}
-                                                    </div>
-                                                ))}
+                                            {selectedSummary && (
+                                                <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                                                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                                        <p className="text-[10px] uppercase tracking-wider text-zinc-400">
+                                                            Monthly average
+                                                        </p>
 
-                                                {calendarDays.map(day => {
-                                                    const key =
-                                                        getDateKey(day);
-
-                                                    const item =
-                                                        dailyMap.get(key);
-
-                                                    const inPeriod =
-                                                        key >=
-                                                            (
-                                                                analytics?.period
-                                                                    .start ??
-                                                                ""
-                                                            ).replace(
-                                                                /-/g,
-                                                                ""
-                                                            ) &&
-                                                        key <=
-                                                            (
-                                                                analytics?.period
-                                                                    .end ??
-                                                                ""
-                                                            ).replace(
-                                                                /-/g,
-                                                                ""
-                                                            );
-
-                                                    const isSelected =
-                                                        selectedDate === key;
-
-                                                    const hasActivity =
-                                                        !!item &&
-                                                        (item.visitors > 0 ||
-                                                            item.page_views >
-                                                                0 ||
-                                                            item.traffic > 0);
-
-                                                    return (
-                                                        <button
-                                                            key={key}
-                                                            type="button"
-                                                            disabled={
-                                                                !inPeriod
-                                                            }
-                                                            onClick={() =>
-                                                                item &&
-                                                                setSelectedDate(
-                                                                    key
-                                                                )
-                                                            }
-                                                            className={[
-                                                                "min-h-20 rounded-xl border p-2 text-left transition sm:min-h-24",
-                                                                inPeriod
-                                                                    ? "border-zinc-200 bg-white hover:border-violet-400 dark:border-zinc-800 dark:bg-zinc-950/60 dark:hover:border-violet-500"
-                                                                    : "border-transparent bg-transparent opacity-30",
-                                                                isSelected
-                                                                    ? "border-violet-500 ring-1 ring-violet-500"
-                                                                    : "",
-                                                                hasActivity
-                                                                    ? "shadow-sm"
-                                                                    : ""
-                                                            ].join(" ")}
-                                                        >
-                                                            <span className="text-[10px] font-medium text-zinc-400">
-                                                                {day.getDate()}
-                                                            </span>
-
-                                                            {item ? (
-                                                                <div className="mt-2 space-y-1 text-[9px] leading-tight">
-                                                                    <p className="text-zinc-600 dark:text-zinc-300">
-                                                                        V{" "}
-                                                                        <strong className="text-zinc-950 dark:text-white">
-                                                                            {formatNumber(
-                                                                                item.visitors
-                                                                            )}
-                                                                        </strong>
-                                                                    </p>
-
-                                                                    <p className="text-zinc-600 dark:text-zinc-300">
-                                                                        P{" "}
-                                                                        <strong className="text-zinc-950 dark:text-white">
-                                                                            {formatNumber(
-                                                                                item.page_views
-                                                                            )}
-                                                                        </strong>
-                                                                    </p>
-
-                                                                    <p className="text-zinc-600 dark:text-zinc-300">
-                                                                        T{" "}
-                                                                        <strong className="text-zinc-950 dark:text-white">
-                                                                            {formatNumber(
-                                                                                item.traffic
-                                                                            )}
-                                                                        </strong>
-                                                                    </p>
-                                                                </div>
-                                                            ) : (
-                                                                <p className="mt-3 text-[9px] text-zinc-400">
-                                                                    No data
-                                                                </p>
+                                                        <p className="mt-2 text-xl font-semibold text-zinc-950 dark:text-white">
+                                                            {formatNumber(
+                                                                selectedSummary.monthly_average
                                                             )}
-                                                        </button>
-                                                    );
-                                                })}
-                                            </div>
+                                                        </p>
+                                                    </div>
 
-                                            {calendarDays.length === 0 && (
-                                                <div className="py-12 text-center">
-                                                    <BarChart3
-                                                        size={24}
-                                                        className="mx-auto text-zinc-300 dark:text-zinc-700"
-                                                    />
+                                                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                                        <p className="text-[10px] uppercase tracking-wider text-zinc-400">
+                                                            Daily average
+                                                        </p>
 
-                                                    <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-                                                        Historical analytics are
-                                                        not available yet.
-                                                    </p>
+                                                        <p className="mt-2 text-xl font-semibold text-zinc-950 dark:text-white">
+                                                            {formatNumber(
+                                                                selectedSummary.daily_average
+                                                            )}
+                                                        </p>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                                                        <p className="text-[10px] uppercase tracking-wider text-zinc-400">
+                                                            Total
+                                                        </p>
+
+                                                        <p className="mt-2 text-xl font-semibold text-zinc-950 dark:text-white">
+                                                            {formatNumber(
+                                                                selectedSummary.total
+                                                            )}
+                                                        </p>
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>
 
-                                        {/* Metric summaries */}
-                                        <div className="mt-8">
-                                            <div>
-                                                <p className="text-xs font-medium uppercase tracking-[0.16em] text-violet-600 dark:text-violet-400">
-                                                    Analytics summary
-                                                </p>
+                                        <div className="mt-8 grid gap-4 lg:grid-cols-3">
+                                            <MetricSummary
+                                                icon={<Users size={20} />}
+                                                label="Visitors"
+                                                summary={
+                                                    analytics?.summary
+                                                        .visitors
+                                                }
+                                            />
 
-                                                <h3 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-950 dark:text-white">
-                                                    TboyArts activity
-                                                </h3>
-                                            </div>
+                                            <MetricSummary
+                                                icon={<Eye size={20} />}
+                                                label="Page views"
+                                                summary={
+                                                    analytics?.summary
+                                                        .page_views
+                                                }
+                                            />
 
-                                            <div className="mt-5 space-y-4">
-                                                <MetricSummary
-                                                    icon={<Users size={20} />}
-                                                    label="Visitors"
-                                                    summary={
-                                                        analytics?.summary
-                                                            .visitors
-                                                    }
-                                                />
-
-                                                <MetricSummary
-                                                    icon={<Eye size={20} />}
-                                                    label="Page views"
-                                                    summary={
-                                                        analytics?.summary
-                                                            .page_views
-                                                    }
-                                                />
-
-                                                <MetricSummary
-                                                    icon={
-                                                        <BarChart3
-                                                            size={20}
-                                                        />
-                                                    }
-                                                    label="Traffic"
-                                                    summary={
-                                                        analytics?.summary
-                                                            .traffic
-                                                    }
-                                                />
-                                            </div>
+                                            <MetricSummary
+                                                icon={<Activity size={20} />}
+                                                label="Traffic"
+                                                summary={
+                                                    analytics?.summary.traffic
+                                                }
+                                            />
                                         </div>
-
-                                        {analytics?.period && (
-                                            <p className="mt-6 text-xs text-zinc-400">
-                                                Analytics period:{" "}
-                                                {analytics.period.start} —{" "}
-                                                {analytics.period.end}
-                                            </p>
-                                        )}
                                     </>
                                 )}
                             </div>
